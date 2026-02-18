@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "stable-diffusion-pytorch"
+version = "0.1.0"
+description = "Stable Diffusion using only Pytorch"
+readme = "README.md"
+requires-python = "==3.11.3"
+dependencies = [
+    "ipykernel",
+    "ipywidgets",
+    "jupyter",
+    "lightning==2.0.9",
+    "numpy==1.25.0",
+    "pillow==9.5.0",
+    "ptyprocess",
+    "setuptools<70",
+    "tqdm==4.65.0",
+    "transformers==4.33.2"
+]
+
+[project.scripts]
+stable-diffusion = "src.main:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+    "isort>=5.0",
+    "mypy>=1.0",
+]
+cpu = [
+    "torch==2.10.0",
+    "torchvision==0.25.0",
+]
+cuda13 = [
+    "torch==2.10.0",
+    "torchvision==0.25.0",
+]
+
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "cuda13" }]]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cuda", extra = "cuda13" },
+]
+torchvision = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cuda", extra = "cuda13" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

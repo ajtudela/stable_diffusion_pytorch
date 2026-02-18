@@ -1,0 +1,5 @@
+.vscode/
+__pycache__/
+data/merges.txt
+v1-5-pruned-emaonly.ckpt
+vocab.json
