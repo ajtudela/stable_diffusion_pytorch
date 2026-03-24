@@ -87,93 +87,150 @@ def _render(g: graphviz.Digraph, name: str) -> None:
 
 
 def draw_pipeline() -> None:
-    """High-level pipeline: Text -> CLIP -> U-Net <- VAE <-> Image."""
+    """Stable Diffusion pipeline with denoising loop (merged overview).
+
+    Layout inspired by the classic SD pipeline diagram:
+    - Text prompt → Tokenizer → CLIP → text embeddings ↓ U-Net (top row)
+    - Noise seed → Latents → U-Net → Scheduler loop (middle row)
+    - Output latents → VAE Decoder → Generated Image (right)
+    """
     g = graphviz.Digraph(
         "pipeline",
         graph_attr=dict(
-            rankdir="TB",
+            rankdir="LR",
             label="Stable Diffusion \u2014 Pipeline Overview",
             labelloc="t",
-            fontsize="18",
+            fontsize="20",
             fontname=_FONT_BOLD,
             fontcolor=C_DARK_TEXT,
             bgcolor="white",
-            pad="0.4",
-            nodesep="0.5",
+            pad="0.5",
+            nodesep="0.35",
             ranksep="0.6",
             dpi="180",
         ),
         node_attr=_NODE_DEFAULTS,
-        edge_attr=dict(fontname=_FONT, fontsize="8"),
+        edge_attr=dict(fontname=_FONT, fontsize="9"),
     )
 
-    # Inputs
-    g.node("prompt", "Text Prompt",
+    # ── Left column: prompt + inputs ────────────────────────────────
+    g.node("prompt", "Text Prompt\n\"a person surfing a wave\"",
            fillcolor=C_LIGHT_BG, fontcolor=C_DARK_TEXT)
-    g.node("image_in", "Input Image\n(optional, for img2img)",
-           fillcolor=C_LIGHT_BG, fontcolor=C_DARK_TEXT)
-    g.node("noise", "Random Noise\nz_T ~ N(0, I)",
-           fillcolor="#555555", fontcolor=C_TEXT)
 
-    # CLIP
-    g.node("tokenizer", "BPE Tokenizer\n(B, 77)",
+    with g.subgraph(name="cluster_inputs") as inp:
+        inp.attr(
+            label="Input Images",
+            fontsize="12", fontname=_FONT_BOLD, fontcolor=C_DARK_TEXT,
+            style="rounded,bold", color="#999999", bgcolor="#f5f5f5",
+        )
+        inp.node("image_in", "Input Image\n(optional)\n512 × 512",
+                 fillcolor=C_LIGHT_BG, fontcolor=C_DARK_TEXT)
+        inp.node("noise", "Latent Seed\n(noise)\n64 × 64",
+                 fillcolor="#444444", fontcolor=C_TEXT,
+                 style="rounded,filled")
+
+    # ── Top row: text path ─────────────────────────────────────────
+    g.node("tokenizer", "Text\nTokenizer",
            fillcolor=C_CLIP_DARK, fontcolor=C_TEXT)
-    g.node("clip", "CLIP Text Encoder\n12\u00d7 Transformer Blocks\n\u2192 (B, 77, 768)",
-           fillcolor=C_CLIP, fontcolor=C_TEXT)
+    g.node("clip", "CLIP",
+           fillcolor=C_CLIP, fontcolor=C_TEXT,
+           width="1.2", height="0.7")
+    g.node("text_emb", "Text\nEmbeddings\n(77 \u00d7 768)",
+           fillcolor=C_CLIP, fontcolor=C_TEXT,
+           style="rounded,filled,dashed")
 
-    # VAE Encoder
-    g.node("vae_enc",
-           "VAE Encoder\n3\u2192128\u2192256\u2192512\u21924 ch\n\u21938\u00d7 spatial",
-           fillcolor=C_VAE_ENC, fontcolor=C_TEXT)
+    g.edge("prompt", "tokenizer", color=C_CLIP, penwidth="2")
+    g.edge("tokenizer", "clip", color=C_CLIP, penwidth="2")
+    g.edge("clip", "text_emb", color=C_CLIP, penwidth="2",
+           label="  768  ")
 
-    # Time
-    g.node("timestep", "Timestep  t",
-           fillcolor=C_TIME, fontcolor=C_DARK_TEXT)
-    g.node("time_emb", "Time Embedding\nSinusoidal \u2192 MLP\n320 \u2192 1280",
-           fillcolor=C_TIME, fontcolor=C_DARK_TEXT)
-
-    # U-Net
-    g.node("unet",
-           "Diffusion U-Net\nEncoder \u2192 Bottleneck \u2192 Decoder\n"
-           "conditioned on text + timestep",
-           fillcolor=C_UNET, fontcolor=C_TEXT,
-           width="3.5", height="0.9")
-
-    # VAE Decoder
-    g.node("vae_dec",
-           "VAE Decoder\n4\u2192512\u2192256\u2192128\u21923 ch\n\u21918\u00d7 spatial",
-           fillcolor=C_VAE_DEC, fontcolor=C_TEXT)
-
-    # Output
-    g.node("image_out", "Generated Image",
+    g.node("latents", "Latents\n64 \u00d7 64",
            fillcolor=C_LIGHT_BG, fontcolor=C_DARK_TEXT)
 
-    # Edges
-    g.edge("prompt", "tokenizer", color=C_CLIP)
-    g.edge("tokenizer", "clip", color=C_CLIP)
-    g.edge("clip", "unet", label="  context\n  (B, 77, 768)",
-           color=C_CLIP, style="dashed")
-    g.edge("image_in", "vae_enc", color=C_VAE_ENC)
-    g.edge("vae_enc", "unet", label="  latent z\n  (B, 4, H/8, W/8)",
-           color=C_VAE_ENC)
-    g.edge("noise", "unet", label="  z_T", color="#999999", style="dashed")
-    g.edge("timestep", "time_emb", color=C_TIME)
-    g.edge("time_emb", "unet", label="  (B, 1280)",
-           color=C_TIME, style="dashed")
-    g.edge("unet", "vae_dec",
-           label="  denoised latent z_0\n  (B, 4, H/8, W/8)", color=C_UNET)
-    g.edge("vae_dec", "image_out", color=C_VAE_DEC)
+    # ── Centre: U-Net + Scheduler loop ─────────────────────────────
+    with g.subgraph(name="cluster_denoise") as loop:
+        loop.attr(
+            label="Denoising Loop",
+            fontsize="13", fontname=_FONT_BOLD, fontcolor=C_TIME,
+            style="rounded,bold", color=C_TIME, bgcolor="#fef9e7",
+        )
+        loop.node(
+            "unet", "U-Net",
+            fillcolor=C_UNET, fontcolor=C_TEXT,
+            width="1.8", height="1.0",
+            fontsize="14", fontname=_FONT_BOLD,
+        )
+        loop.node(
+            "scheduler", "Scheduler\n(denoise step)",
+            fillcolor=C_DARK_TEXT, fontcolor=C_TEXT,
+            fontsize="10",
+        )
+        loop.edge("unet", "scheduler",
+                  color=C_UNET, penwidth="2",
+                  label="  predicted noise  ",
+                  fontsize="8")
+        # Scheduler feeds back to U-Net (loop within the denoising cluster)
+        loop.edge("scheduler", "unet",
+                  color=C_TIME, penwidth="2",
+                  label="  repeat N times  ",
+                  fontcolor=C_TIME, fontname=_FONT_BOLD,
+                  fontsize="9",
+                  style="bold",
+                  constraint="false")
 
-    # Horizontal alignment hints
+    g.node("latents", "Latents\n64 × 64",
+           fillcolor=C_LIGHT_BG, fontcolor=C_DARK_TEXT)
+
+    # ── Left: VAE Encoder (inputs → latents) ────────────────
+    g.node("vae_enc", "VAE\nEncoder",
+           fillcolor=C_VAE_ENC, fontcolor=C_TEXT,
+           shape="trapezium", orientation="270",
+           width="1.6", height="0.8")
+
+    # ── Right: VAE Decoder (latents → image) ────────────────────
+    g.node("out_latents", "Text\nConditioned\nLatents\n64 \u00d7 64",
+           fillcolor=C_LIGHT_BG, fontcolor=C_DARK_TEXT)
+    g.node("vae_dec", "VAE\nDecoder",
+           fillcolor=C_VAE_DEC, fontcolor=C_TEXT,
+           shape="invtrapezium", orientation="270",
+           width="1.6", height="0.8")
+    g.node("image_out", "Generated\nImage\n512 \u00d7 512",
+           fillcolor=C_LIGHT_BG, fontcolor=C_DARK_TEXT)
+
+    # ── Main flow edges ────────────────────────────────────────────
+    # Inputs cluster → VAE Encoder → Latents
+    g.edge("image_in", "vae_enc", color=C_VAE_ENC, penwidth="2")
+    g.edge("vae_enc", "latents", color=C_VAE_ENC, penwidth="2")
+    # Latents → U-Net
+    g.edge("latents", "unet", color=C_DARK_TEXT, penwidth="2",
+           label="  Latents  ")
+    # Text embeddings → U-Net
+    g.edge("text_emb", "unet", color=C_CLIP, penwidth="2",
+           style="dashed")
+    # Scheduler → output latents (after final iteration)
+    g.edge("scheduler", "out_latents", color=C_UNET, penwidth="2",
+           label="  final  ",
+           fontsize="8")
+    # Output latents → VAE Decoder → Image
+    g.edge("out_latents", "vae_dec", color=C_VAE_DEC, penwidth="2")
+    g.edge("vae_dec", "image_out", color=C_VAE_DEC, penwidth="2")
+
+    # ── Layout hints ───────────────────────────────────────────────
+    # In LR layout, rank="same" = same vertical column.
     with g.subgraph() as s:
         s.attr(rank="same")
-        s.node("prompt")
-        s.node("image_in")
-        s.node("noise")
+        s.node("tokenizer")
+        s.node("vae_enc")
+
     with g.subgraph() as s:
         s.attr(rank="same")
-        s.node("timestep")
         s.node("clip")
+        s.node("latents")
+
+    # Vertical ordering: text prompt above input images
+    g.edge("prompt", "image_in", style="invis")
+    g.edge("tokenizer", "vae_enc", style="invis")
+    g.edge("clip", "latents", style="invis")
 
     _render(g, "pipeline_overview")
 
@@ -184,7 +241,24 @@ def draw_pipeline() -> None:
 
 
 def draw_unet() -> None:
-    """U-Net encoder-bottleneck-decoder with skip connections."""
+    """U-Net in classic U-shape inspired by the original paper diagram.
+
+    Uses color-coded arrows for different operations and a legend.
+    Encoder path goes down-left, decoder path goes up-right,
+    with horizontal skip (copy & concat) connections.
+    """
+    # Colour definitions for arrow types
+    C_CONV = "#1565C0"       # conv 3x3 / main flow
+    C_POOL = "#8B0000"       # max pool / downsample
+    C_UP = "#1B5E20"         # up-conv / upsample
+    C_COPY = "#9E9E9E"       # copy & crop (skip)
+    C_CONV1 = "#00838F"      # conv 1x1 output
+
+    # Block colours: encoder lighter, decoder slightly different
+    C_ENC_BLOCK = "#90CAF9"
+    C_DEC_BLOCK = "#81D4FA"
+    C_BN_BLOCK = "#7986CB"
+
     g = graphviz.Digraph(
         "unet",
         graph_attr=dict(
@@ -196,112 +270,198 @@ def draw_unet() -> None:
             fontcolor=C_DARK_TEXT,
             bgcolor="white",
             pad="0.5",
-            nodesep="0.4",
+            nodesep="0.7",
             ranksep="0.55",
             dpi="180",
+            splines="line",
         ),
-        node_attr=_NODE_DEFAULTS,
+        node_attr=dict(
+            shape="box",
+            style="filled",
+            fontname=_FONT,
+            fontsize="9",
+            margin="0.12,0.06",
+        ),
         edge_attr=dict(fontname=_FONT, fontsize="8"),
     )
 
-    # Inputs
+    # --- I/O nodes ---
     g.node("input", "Noisy Latent\n(B, 4, H/8, W/8)",
-           fillcolor=C_LIGHT_BG, fontcolor=C_DARK_TEXT)
-    g.node("context", "CLIP Context\n(B, 77, 768)",
-           fillcolor=C_CLIP, fontcolor=C_TEXT)
-    g.node("time", "Time Embedding\n(B, 1280)",
-           fillcolor=C_TIME, fontcolor=C_DARK_TEXT)
-
-    # Encoder stages
-    enc_info = [
-        ("enc0", "Conv 4\u2192320\n+ 2\u00d7(ResBlock + Attention)\nH/8 \u00b7 320 ch"),
-        ("enc1", "Downsample \u21932\n2\u00d7(Res 320\u2192640 + Attn)\nH/16 \u00b7 640 ch"),
-        ("enc2", "Downsample \u21932\n2\u00d7(Res 640\u21921280 + Attn)\nH/32 \u00b7 1280 ch"),
-        ("enc3", "Downsample \u21932\n2\u00d7 ResBlock\nH/64 \u00b7 1280 ch"),
-    ]
-    for nid, lbl in enc_info:
-        g.node(nid, lbl, fillcolor=C_UNET_ENC, fontcolor=C_TEXT)
-
-    # Bottleneck
-    g.node("bn",
-           "Bottleneck\nResBlock \u2192 Self-Attention(8h, 160d) \u2192 ResBlock\n"
-           "1280 ch \u00b7 H/64",
-           fillcolor=C_UNET_BN, fontcolor=C_TEXT, width="4")
-
-    # Decoder stages
-    dec_info = [
-        ("dec0", "2\u00d7 Res + Upsample \u21912\nH/64\u2192H/32 \u00b7 1280 ch"),
-        ("dec1", "2\u00d7(Res+Attn) + Upsample \u21912\nH/32\u2192H/16 \u00b7 1280 ch"),
-        ("dec2", "2\u00d7(Res+Attn) + Upsample \u21912\nH/16\u2192H/8 \u00b7 640 ch"),
-        ("dec3", "3\u00d7(ResBlock + Attention)\nH/8 \u00b7 320 ch"),
-    ]
-    for nid, lbl in dec_info:
-        g.node(nid, lbl, fillcolor=C_UNET_DEC, fontcolor=C_TEXT)
-
-    # Output
-    g.node("out_conv", "GroupNorm \u2192 SiLU \u2192 Conv 320\u21924",
-           fillcolor=C_GRAY, fontcolor=C_TEXT)
+           fillcolor=C_LIGHT_BG, fontcolor=C_DARK_TEXT,
+           style="rounded,filled")
     g.node("output", "Predicted Noise\n(B, 4, H/8, W/8)",
-           fillcolor=C_LIGHT_BG, fontcolor=C_DARK_TEXT)
+           fillcolor=C_LIGHT_BG, fontcolor=C_DARK_TEXT,
+           style="rounded,filled")
 
-    # Main flow
-    g.edge("input", "enc0", color=C_UNET, penwidth="2")
-    for i in range(3):
-        g.edge(f"enc{i}", f"enc{i+1}", color=C_UNET, penwidth="2")
-    g.edge("enc3", "bn", color=C_UNET, penwidth="2")
-    g.edge("bn", "dec0", color=C_UNET, penwidth="2")
-    for i in range(3):
-        g.edge(f"dec{i}", f"dec{i+1}", color=C_UNET, penwidth="2")
-    g.edge("dec3", "out_conv", color=C_UNET, penwidth="2")
-    g.edge("out_conv", "output", color=C_UNET, penwidth="2")
-
-    # Skip connections
-    skip_pairs = [
-        ("enc3", "dec0", "skip 1280ch"),
-        ("enc2", "dec1", "skip 1280ch"),
-        ("enc1", "dec2", "skip 640ch"),
-        ("enc0", "dec3", "skip 320ch"),
+    # --- Encoder blocks ---
+    enc_blocks = [
+        ("enc0", "Conv 4\u2192320\n2\u00d7(Res+Attn)\n"
+                 "320 ch", "H/8 \u00d7 W/8"),
+        ("enc1", "2\u00d7(Res 320\u2192640+Attn)\n"
+                 "640 ch", "H/16 \u00d7 W/16"),
+        ("enc2", "2\u00d7(Res 640\u21921280+Attn)\n"
+                 "1280 ch", "H/32 \u00d7 W/32"),
+        ("enc3", "2\u00d7 ResBlock\n"
+                 "1280 ch", "H/64 \u00d7 W/64"),
     ]
-    skip_colors = ["#e74c3c", "#e67e22", "#f1c40f", "#2ecc71"]
-    for (src, dst, lbl), col in zip(skip_pairs, skip_colors):
-        g.edge(src, dst, label=f"  {lbl}  ", color=col, style="dashed",
-               penwidth="1.8", fontcolor=col, constraint="false")
+    for nid, lbl, res in enc_blocks:
+        g.node(nid, f"{lbl}\n{res}",
+               fillcolor=C_ENC_BLOCK, fontcolor=C_DARK_TEXT,
+               width="2.2", group="enc")
 
-    # -- Conditioning legend (replaces individual dotted arrows to reduce
-    #    visual clutter).  A compact annotation on the right explains
-    #    which stages receive time / context conditioning.
+    # --- Bottleneck ---
+    g.node("bn",
+           "Bottleneck\nRes \u2192 Self-Attn(8h,160d) \u2192 Res\n"
+           "1280 ch \u00b7 H/64 \u00d7 W/64",
+           fillcolor=C_BN_BLOCK, fontcolor=C_TEXT,
+           width="3.5")
+
+    # --- Decoder blocks ---
+    dec_blocks = [
+        ("dec0", "2\u00d7Res\n"
+                 "1280 ch", "H/64\u2192H/32"),
+        ("dec1", "2\u00d7(Res+Attn)\n"
+                 "1280 ch", "H/32\u2192H/16"),
+        ("dec2", "2\u00d7(Res+Attn)\n"
+                 "640 ch", "H/16\u2192H/8"),
+        ("dec3", "3\u00d7(Res+Attn)\n"
+                 "320 ch", "H/8 \u00d7 W/8"),
+    ]
+    for nid, lbl, res in dec_blocks:
+        g.node(nid, f"{lbl}\n{res}",
+               fillcolor=C_DEC_BLOCK, fontcolor=C_DARK_TEXT,
+               width="2.2", group="dec")
+
+    # --- Output conv ---
+    g.node("out_conv", "GN \u2192 SiLU \u2192 Conv 320\u21924",
+           fillcolor=C_GRAY, fontcolor=C_TEXT, group="dec")
+
+    # --- Downsample nodes (explicit, colour-coded) ---
+    for i in range(3):
+        g.node(f"down{i}", "\u2193 stride 2",
+               fillcolor="#FFCDD2", fontcolor=C_POOL,
+               shape="ellipse", width="1.0", height="0.3",
+               fontsize="8", group="enc")
+
+    # --- Upsample nodes (explicit, colour-coded) ---
+    for i in range(3):
+        g.node(f"up{i}", "\u2191 upsample \u00d72",
+               fillcolor="#C8E6C9", fontcolor=C_UP,
+               shape="ellipse", width="1.0", height="0.3",
+               fontsize="8", group="dec")
+
+    # --- Legend ---
     g.node(
-        "cond_legend",
-        (
-            "Conditioning\n"
-            "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
-            "\u23f1 Time Emb \u2192 all ResBlocks\n"
-            "(additive, after first conv)\n\n"
-            "\U0001f4dd CLIP Context \u2192 cross-attn\n"
-            "in enc0-2, bn, dec1-3"
-        ),
-        shape="note",
-        style="filled",
-        fillcolor="#f9f9f9",
-        fontcolor=C_DARK_TEXT,
-        fontname=_FONT,
-        fontsize="9",
-        color="#cccccc",
+        "legend",
+        ("Legend\n"
+         "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"
+         "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+         "\u2192  conv 3\u00d73 / ResBlock + Attn\n"
+         "\u2192  max pool / stride-2 downsample\n"
+         "\u2192  upsample \u00d72 + conv\n"
+         "\u2192  copy & concat (skip)\n"
+         "\u2192  conv 1\u00d71 output\n\n"
+         "\u23f1 Time Emb \u2192 all ResBlocks\n"
+         "\U0001f4dd CLIP Context \u2192 cross-attn\n"
+         "   in enc0\u20132, bn, dec1\u20133"),
+        shape="note", style="filled",
+        fillcolor="#f9f9f9", fontcolor=C_DARK_TEXT,
+        fontname=_FONT, fontsize="9", color="#cccccc",
     )
 
-    # Light arrows from context / time to the legend to visually connect
-    g.edge("context", "cond_legend", style="dashed", color=C_CLIP,
-           arrowhead="none", constraint="false")
-    g.edge("time", "cond_legend", style="dashed", color=C_TIME,
-           arrowhead="none", constraint="false")
-
-    # Horizontal alignment for inputs
+    # --- Rank constraints (classic U-shape) ---
+    # Row 0 (top): input, out_conv, output, legend
     with g.subgraph() as s:
         s.attr(rank="same")
         s.node("input")
-        s.node("context")
-        s.node("time")
-        s.node("cond_legend")
+        s.node("out_conv")
+        s.node("output")
+        s.node("legend")
+    # Row 1: enc0 / dec3
+    with g.subgraph() as s:
+        s.attr(rank="same")
+        s.node("enc0")
+        s.node("dec3")
+    # Row 1.5: down0 / up2
+    with g.subgraph() as s:
+        s.attr(rank="same")
+        s.node("down0")
+        s.node("up2")
+    # Row 2: enc1 / dec2
+    with g.subgraph() as s:
+        s.attr(rank="same")
+        s.node("enc1")
+        s.node("dec2")
+    # Row 2.5: down1 / up1
+    with g.subgraph() as s:
+        s.attr(rank="same")
+        s.node("down1")
+        s.node("up1")
+    # Row 3: enc2 / dec1
+    with g.subgraph() as s:
+        s.attr(rank="same")
+        s.node("enc2")
+        s.node("dec1")
+    # Row 3.5: down2 / up0
+    with g.subgraph() as s:
+        s.attr(rank="same")
+        s.node("down2")
+        s.node("up0")
+    # Row 4: enc3 / dec0
+    with g.subgraph() as s:
+        s.attr(rank="same")
+        s.node("enc3")
+        s.node("dec0")
+    # Row 5 (bottom): bottleneck
+
+    # --- Encoder flow (down, left column) ---
+    g.edge("input", "enc0", color=C_CONV, penwidth="2")
+    g.edge("enc0", "down0", color=C_POOL, penwidth="2")
+    g.edge("down0", "enc1", color=C_POOL, penwidth="2")
+    g.edge("enc1", "down1", color=C_POOL, penwidth="2")
+    g.edge("down1", "enc2", color=C_POOL, penwidth="2")
+    g.edge("enc2", "down2", color=C_POOL, penwidth="2")
+    g.edge("down2", "enc3", color=C_POOL, penwidth="2")
+    g.edge("enc3", "bn", color=C_CONV, penwidth="2")
+
+    # --- Decoder flow (up, right column) ---
+    g.edge("bn", "dec0", color=C_CONV, penwidth="2")
+    g.edge("dec0", "up0", color=C_UP, penwidth="2",
+           constraint="false")
+    g.edge("up0", "dec1", color=C_UP, penwidth="2",
+           constraint="false")
+    g.edge("dec1", "up1", color=C_UP, penwidth="2",
+           constraint="false")
+    g.edge("up1", "dec2", color=C_UP, penwidth="2",
+           constraint="false")
+    g.edge("dec2", "up2", color=C_UP, penwidth="2",
+           constraint="false")
+    g.edge("up2", "dec3", color=C_UP, penwidth="2",
+           constraint="false")
+    g.edge("dec3", "out_conv", color=C_CONV, penwidth="2",
+           constraint="false")
+    g.edge("out_conv", "output", color=C_CONV1, penwidth="2",
+           constraint="false")
+
+    # Invisible edges to help decoder column ordering (top→bottom)
+    g.edge("dec3", "up2", style="invis")
+    g.edge("up2", "dec2", style="invis")
+    g.edge("dec2", "up1", style="invis")
+    g.edge("up1", "dec1", style="invis")
+    g.edge("dec1", "up0", style="invis")
+    g.edge("up0", "dec0", style="invis")
+
+    # --- Skip connections (horizontal, same rank) ---
+    skip_pairs = [
+        ("enc3", "dec0", "concat 1280ch"),
+        ("enc2", "dec1", "concat 1280ch"),
+        ("enc1", "dec2", "concat 640ch"),
+        ("enc0", "dec3", "concat 320ch"),
+    ]
+    for src, dst, lbl in skip_pairs:
+        g.edge(src, dst, label=f"  {lbl}  ", color=C_COPY,
+               style="dashed", penwidth="2", fontcolor=C_COPY,
+               constraint="false", arrowhead="vee")
 
     _render(g, "unet_architecture")
 
@@ -324,10 +484,11 @@ def draw_vae() -> None:
             fontcolor=C_DARK_TEXT,
             bgcolor="white",
             pad="0.4",
-            nodesep="0.25",
+            nodesep="0.4",
             ranksep="0.35",
             dpi="180",
             compound="true",
+            newrank="true",
         ),
         node_attr=_NODE_DEFAULTS,
         edge_attr=dict(fontname=_FONT, fontsize="8"),
@@ -423,10 +584,15 @@ def draw_vae() -> None:
             dec.edge(dec_blocks[i][0], dec_blocks[i + 1][0],
                      color=C_VAE_DEC, **kw3)
 
-    # Link encoder output to decoder input
-    g.edge("e_out", "d_in", label="  latent space  ",
-           color="#555555", style="dashed", penwidth="2",
-           ltail="cluster_enc", lhead="cluster_dec")
+    # Force side-by-side layout: anchor top and bottom nodes
+    with g.subgraph() as s:
+        s.attr(rank="same")
+        s.node("e_in")
+        s.node("d_in")
+    with g.subgraph() as s:
+        s.attr(rank="same")
+        s.node("e_out")
+        s.node("d_out")
 
     _render(g, "vae_encoder_decoder")
 
@@ -446,6 +612,7 @@ def draw_attention() -> None:
             labelloc="t", fontsize="18", fontname=_FONT_BOLD,
             fontcolor=C_DARK_TEXT, bgcolor="white",
             pad="0.4", nodesep="0.3", ranksep="0.35", dpi="180",
+            splines="ortho",
         ),
         node_attr=_NODE_DEFAULTS,
         edge_attr=dict(fontname=_FONT, fontsize="8"),
@@ -540,7 +707,12 @@ def draw_attention() -> None:
 
 
 def draw_unet_attention_block() -> None:
-    """Self-Attn -> Cross-Attn -> GeGLU FFN with residual connections."""
+    """Self-Attn -> Cross-Attn -> GeGLU FFN with residual connections.
+
+    The ``(+) Residual`` nodes live **outside** their respective clusters
+    so that the skip-connection arrows route *below* each sub-block
+    instead of alongside it.
+    """
     g = graphviz.Digraph(
         "unet_attn_block",
         graph_attr=dict(
@@ -548,13 +720,14 @@ def draw_unet_attention_block() -> None:
             label="U-Net Transformer Attention Block",
             labelloc="t", fontsize="18", fontname=_FONT_BOLD,
             fontcolor=C_DARK_TEXT, bgcolor="white",
-            pad="0.4", nodesep="0.25", ranksep="0.35", dpi="180",
+            pad="0.4", nodesep="0.5", ranksep="0.45", dpi="180",
+            splines="ortho",
         ),
         node_attr=_NODE_DEFAULTS,
         edge_attr=dict(fontname=_FONT, fontsize="8"),
     )
 
-    # Pre-processing
+    # ── Pre-processing ─────────────────────────────────────────────
     g.node("feat_in", "Feature Map  (B, C, H, W)",
            fillcolor=C_LIGHT_BG, fontcolor=C_DARK_TEXT)
     g.node("gn", "GroupNorm(32, C)", fillcolor=C_GRAY, fontcolor=C_TEXT)
@@ -567,74 +740,89 @@ def draw_unet_attention_block() -> None:
     g.edge("gn", "conv_in", color=C_UNET)
     g.edge("conv_in", "flatten", color=C_UNET)
 
-    # --- Self-Attention sub-block ---
+    # ── Self-Attention sub-block ───────────────────────────────────
     with g.subgraph(name="cluster_sa") as sa:
         sa.attr(
             label="Self-Attention", fontsize="12",
             fontname=_FONT_BOLD, fontcolor=C_ATTN,
             style="rounded,dashed", color=C_ATTN, bgcolor="#eef2f5",
         )
-        sa.node("sa_ln", "LayerNorm", fillcolor=C_NORM, fontcolor=C_TEXT)
+        sa.node("sa_ln", "LayerNorm",
+                fillcolor=C_NORM, fontcolor=C_TEXT)
         sa.node("sa_attn", "Multi-Head Self-Attention\n(8 heads)",
                 fillcolor=C_ATTN, fontcolor=C_TEXT)
-        sa.node("sa_res", "(+) Residual",
-                fillcolor=C_RESID, fontcolor=C_TEXT)
         sa.edge("sa_ln", "sa_attn", color=C_ATTN)
-        sa.edge("sa_attn", "sa_res", color=C_ATTN)
+
+    # (+) Residual BELOW cluster_sa
+    g.node("sa_res", "(+) Residual",
+           fillcolor=C_RESID, fontcolor=C_TEXT)
 
     g.edge("flatten", "sa_ln", color=C_UNET)
-    g.edge("flatten", "sa_res", color=C_SKIP, style="dashed",
-           label="  residual", fontcolor=C_SKIP, constraint="false")
+    g.edge("sa_attn", "sa_res", color=C_ATTN)
+    # Skip: flatten → sa_res  (routes below SA block, left side)
+    g.edge("flatten:w", "sa_res:w", color=C_SKIP, style="dashed",
+           xlabel="residual", fontcolor=C_SKIP, constraint="false")
 
-    # --- Cross-Attention sub-block ---
+    # ── Cross-Attention sub-block ──────────────────────────────────
     with g.subgraph(name="cluster_ca") as ca:
         ca.attr(
             label="Cross-Attention", fontsize="12",
             fontname=_FONT_BOLD, fontcolor=C_CLIP,
             style="rounded,dashed", color=C_CLIP, bgcolor="#eef2f5",
         )
-        ca.node("ca_ln", "LayerNorm", fillcolor=C_NORM, fontcolor=C_TEXT)
+        ca.node("ca_ln", "LayerNorm",
+                fillcolor=C_NORM, fontcolor=C_TEXT)
         ca.node("ca_attn", "Multi-Head Cross-Attention\n(8 heads)",
                 fillcolor=C_CLIP_DARK, fontcolor=C_TEXT)
-        ca.node("ca_res", "(+) Residual",
-                fillcolor=C_RESID, fontcolor=C_TEXT)
         ca.edge("ca_ln", "ca_attn", color=C_CLIP)
-        ca.edge("ca_attn", "ca_res", color=C_CLIP)
 
+    # (+) Residual BELOW cluster_ca
+    g.node("ca_res", "(+) Residual",
+           fillcolor=C_RESID, fontcolor=C_TEXT)
+
+    # CLIP context → right side so it doesn't collide with residuals
     g.node("clip_ctx", "CLIP Context\n(B, 77, 768)",
            fillcolor=C_CLIP, fontcolor=C_TEXT)
-    g.edge("clip_ctx", "ca_attn", color=C_CLIP, style="dashed",
-           label="  K, V from text", fontcolor=C_CLIP, constraint="false")
-    g.edge("sa_res", "ca_ln", color=C_UNET)
-    g.edge("sa_res", "ca_res", color=C_SKIP, style="dashed",
+    g.edge("clip_ctx:s", "ca_attn:e", color=C_CLIP, style="dashed",
+           xlabel="K, V from text", fontcolor=C_CLIP,
            constraint="false")
 
-    # --- GeGLU FFN sub-block ---
+    g.edge("sa_res", "ca_ln", color=C_UNET)
+    g.edge("ca_attn", "ca_res", color=C_CLIP)
+    # Skip: sa_res → ca_res  (routes below CA block, left side)
+    g.edge("sa_res:w", "ca_res:w", color=C_SKIP, style="dashed",
+           constraint="false")
+
+    # ── GeGLU FFN sub-block ────────────────────────────────────────
     with g.subgraph(name="cluster_ff") as ff:
         ff.attr(
             label="GeGLU Feed-Forward", fontsize="12",
             fontname=_FONT_BOLD, fontcolor=C_GEGLU,
             style="rounded,dashed", color=C_GEGLU, bgcolor="#fef9e7",
         )
-        ff.node("ff_ln", "LayerNorm", fillcolor=C_NORM, fontcolor=C_TEXT)
+        ff.node("ff_ln", "LayerNorm",
+                fillcolor=C_NORM, fontcolor=C_TEXT)
         ff.node("ff_up", "Linear \u2192 8\u00b7C\n(split: value + gate)",
                 fillcolor=C_GEGLU, fontcolor=C_TEXT)
         ff.node("ff_geglu", "value \u00d7 GELU(gate)",
                 fillcolor=C_GEGLU, fontcolor=C_TEXT)
         ff.node("ff_down", "Linear \u2192 C",
                 fillcolor=C_GEGLU, fontcolor=C_TEXT)
-        ff.node("ff_res", "(+) Residual",
-                fillcolor=C_RESID, fontcolor=C_TEXT)
         ff.edge("ff_ln", "ff_up", color=C_GEGLU)
         ff.edge("ff_up", "ff_geglu", color=C_GEGLU)
         ff.edge("ff_geglu", "ff_down", color=C_GEGLU)
-        ff.edge("ff_down", "ff_res", color=C_GEGLU)
+
+    # (+) Residual BELOW cluster_ff
+    g.node("ff_res", "(+) Residual",
+           fillcolor=C_RESID, fontcolor=C_TEXT)
 
     g.edge("ca_res", "ff_ln", color=C_UNET)
-    g.edge("ca_res", "ff_res", color=C_SKIP, style="dashed",
+    g.edge("ff_down", "ff_res", color=C_GEGLU)
+    # Skip: ca_res → ff_res  (routes below FFN block, left side)
+    g.edge("ca_res:w", "ff_res:w", color=C_SKIP, style="dashed",
            constraint="false")
 
-    # Output
+    # ── Post-processing ────────────────────────────────────────────
     g.node("reshape_out", "Reshape \u2192 (B, C, H, W)",
            fillcolor=C_NORM, fontcolor=C_TEXT)
     g.node("conv_out", "Conv 1\u00d71 + Long Residual",
@@ -642,8 +830,10 @@ def draw_unet_attention_block() -> None:
 
     g.edge("ff_res", "reshape_out", color=C_UNET)
     g.edge("reshape_out", "conv_out", color=C_UNET)
-    g.edge("feat_in", "conv_out", color=C_SKIP, style="dashed",
-           label="  long residual", fontcolor=C_SKIP, constraint="false")
+    # Long residual → far left (:w) separate from short residuals
+    g.edge("feat_in:w", "conv_out:w", color=C_SKIP, style="dashed",
+           xlabel="long residual", fontcolor=C_SKIP,
+           constraint="false")
 
     _render(g, "unet_attention_block")
 
@@ -663,6 +853,7 @@ def draw_residual_blocks() -> None:
             labelloc="t", fontsize="18", fontname=_FONT_BOLD,
             fontcolor=C_DARK_TEXT, bgcolor="white",
             pad="0.4", nodesep="0.25", ranksep="0.35", dpi="180",
+            splines="ortho",
         ),
         node_attr=_NODE_DEFAULTS,
         edge_attr=dict(fontname=_FONT, fontsize="8"),
@@ -696,7 +887,7 @@ def draw_residual_blocks() -> None:
             vae.edge(vae_nodes[i][0], vae_nodes[i + 1][0],
                      color=C_VAE_ENC)
         vae.edge("vr_in", "vr_add", color=C_SKIP, style="dashed",
-                 label="Identity or\nConv 1\u00d71",
+                 xlabel="Identity or\nConv 1\u00d71",
                  fontcolor=C_SKIP, constraint="false")
 
     # --- U-Net Residual Block ---
@@ -740,7 +931,7 @@ def draw_residual_blocks() -> None:
 
         # Skip connection
         unet.edge("ur_in", "ur_add", color=C_SKIP, style="dashed",
-                  label="Identity or\nConv 1\u00d71",
+                  xlabel="Identity or\nConv 1\u00d71",
                   fontcolor=C_SKIP, constraint="false")
 
     _render(g, "residual_blocks")
@@ -761,6 +952,7 @@ def draw_clip() -> None:
             labelloc="t", fontsize="18", fontname=_FONT_BOLD,
             fontcolor=C_DARK_TEXT, bgcolor="white",
             pad="0.4", nodesep="0.3", ranksep="0.4", dpi="180",
+            splines="ortho",
         ),
         node_attr=_NODE_DEFAULTS,
         edge_attr=dict(fontname=_FONT, fontsize="8"),
@@ -818,9 +1010,9 @@ def draw_clip() -> None:
 
         # Residual skip connections
         tf.edge("tf_ln1", "tf_res1", color=C_SKIP, style="dashed",
-                constraint="false", label="  skip")
+                constraint="false", xlabel="skip", fontcolor=C_SKIP)
         tf.edge("tf_ln2", "tf_res2", color=C_SKIP, style="dashed",
-                constraint="false", label="  skip")
+                constraint="false", xlabel="skip", fontcolor=C_SKIP)
 
     g.edge("emb_add", "tf_ln1", color=C_CLIP, penwidth="2")
 
@@ -839,97 +1031,6 @@ def draw_clip() -> None:
 # ===================================================================
 # 8. Diffusion Process (Denoising Loop)
 # ===================================================================
-
-
-def draw_diffusion_process() -> None:
-    """Iterative denoising: z_T -> z_0 via scheduler and U-Net."""
-    g = graphviz.Digraph(
-        "diffusion_process",
-        graph_attr=dict(
-            rankdir="LR",
-            label="Diffusion Denoising Process",
-            labelloc="t", fontsize="18", fontname=_FONT_BOLD,
-            fontcolor=C_DARK_TEXT, bgcolor="white",
-            pad="0.5", nodesep="0.4", ranksep="0.7", dpi="180",
-        ),
-        node_attr=_NODE_DEFAULTS,
-        edge_attr=dict(fontname=_FONT, fontsize="8"),
-    )
-
-    # --- Inputs (left) ---
-    g.node("prompt", "Text\nPrompt",
-           fillcolor="#555555", fontcolor=C_TEXT)
-    g.node("clip", "CLIP\nEncoder", fillcolor=C_CLIP, fontcolor=C_TEXT)
-    g.node("ctx", "Context\n(B, 77, 768)",
-           fillcolor=C_CLIP, fontcolor=C_TEXT)
-    g.node("noise", "Random\nNoise z_T",
-           fillcolor="#555555", fontcolor=C_TEXT)
-    g.node("vae_enc", "VAE\nEncoder",
-           fillcolor=C_VAE_ENC, fontcolor=C_TEXT)
-    g.node("img_in", "Input Image\n(optional)",
-           fillcolor=C_LIGHT_BG, fontcolor=C_DARK_TEXT)
-
-    g.edge("prompt", "clip", color=C_CLIP, penwidth="2")
-    g.edge("clip", "ctx", color=C_CLIP, penwidth="2")
-    g.edge("img_in", "vae_enc", color=C_VAE_ENC, penwidth="2")
-
-    # --- Scheduler loop (centre) ---
-    with g.subgraph(name="cluster_loop") as loop:
-        loop.attr(
-            label="Scheduler  (T denoising steps)",
-            fontsize="13", fontname=_FONT_BOLD, fontcolor=C_TIME,
-            style="rounded,bold", color=C_TIME, bgcolor="#fef9e7",
-        )
-
-        steps = [
-            ("t_T", "t = T", "#e74c3c"),
-            ("t_T1", "t = T\u22121", "#e67e22"),
-            ("t_dots", "\u00b7 \u00b7 \u00b7", "#f39c12"),
-            ("t_1", "t = 1", "#27ae60"),
-        ]
-        for nid, lbl, col in steps:
-            tc = C_TEXT if col != "#f39c12" else C_DARK_TEXT
-            loop.node(nid, lbl, fillcolor=col, fontcolor=tc, width="0.8")
-        for i in range(len(steps) - 1):
-            loop.edge(steps[i][0], steps[i + 1][0],
-                      color=C_TIME, penwidth="2")
-
-        loop.node(
-            "unet",
-            "U-Net  \u03b5_\u03b8(z_t, t, ctx)\n\n"
-            "Predicts noise at each step",
-            fillcolor=C_UNET, fontcolor=C_TEXT, width="2.5",
-        )
-        loop.node("sched_step", "z_{t\u22121} = Scheduler(z_t, \u03b5)",
-                  fillcolor=C_TIME, fontcolor=C_DARK_TEXT)
-
-        for nid, _, _ in steps:
-            loop.edge(nid, "unet", color=C_UNET, style="dashed")
-        loop.edge("unet", "sched_step", color=C_UNET, penwidth="2")
-
-    # Feed context and noise into loop
-    g.edge("ctx", "unet", label="  cross-attn", color=C_CLIP,
-           style="dashed", fontcolor=C_CLIP)
-    g.edge("noise", "t_T", color="#999999", penwidth="2")
-    g.edge("vae_enc", "t_T", color=C_VAE_ENC, style="dashed",
-           label="  latent z")
-
-    # --- Output (right) ---
-    g.node("z0", "Clean Latent\nz_0",
-           fillcolor="#27ae60", fontcolor=C_TEXT)
-    g.node("vae_dec", "VAE\nDecoder",
-           fillcolor=C_VAE_DEC, fontcolor=C_TEXT)
-    g.node("img_out", "Generated\nImage",
-           fillcolor=C_LIGHT_BG, fontcolor=C_DARK_TEXT)
-
-    g.edge("sched_step", "z0", color=C_TIME, penwidth="2")
-    g.edge("z0", "vae_dec", color=C_VAE_DEC, penwidth="2")
-    g.edge("vae_dec", "img_out", color=C_VAE_DEC, penwidth="2")
-
-    _render(g, "diffusion_process")
-
-
-# ===================================================================
 # Main
 # ===================================================================
 
@@ -944,7 +1045,6 @@ def main() -> None:
     draw_unet_attention_block()
     draw_residual_blocks()
     draw_clip()
-    draw_diffusion_process()
     print(f"\nAll diagrams saved to  {OUT_DIR}/")
 
 

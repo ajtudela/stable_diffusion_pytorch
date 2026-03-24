@@ -94,15 +94,7 @@ The **VAE Residual Block** applies GroupNorm → SiLU → Conv with a skip conne
 
 ---
 
-### 7. Diffusion Denoising Process
-
-The iterative denoising loop: starting from pure noise z_T, the U-Net predicts the noise at each step, and a scheduler computes z_{t-1}. After T steps, the clean latent z_0 is decoded by the VAE into an image.
-
-![Diffusion Process](docs/diffusion_process.png)
-
----
-
-### 8. Channel & Resolution Summary
+### 7. Channel & Resolution Summary
 
 | Stage | Spatial Resolution | VAE Encoder | U-Net Encoder | U-Net Decoder | VAE Decoder |
 | :---: | :----------------: | :---------: | :-----------: | :-----------: | :---------: |
@@ -132,8 +124,12 @@ The iterative denoising loop: starting from pure noise z_T, the U-Net predicts t
 
 ## Regenerate Diagrams
 
-All architecture diagrams are generated with matplotlib. To regenerate them:
+All architecture diagrams are generated with [Graphviz](https://graphviz.org/) via the Python `graphviz` package. To regenerate them:
+
+1. Install Graphviz system binary ([download](https://graphviz.org/download/)) and make sure `dot` is on your PATH.
+2. Install the Python package: `pip install graphviz`
+3. Run:
 
 ```bash
-python generate_diagrams.py
+python scripts/generate_diagrams.py
 ```
