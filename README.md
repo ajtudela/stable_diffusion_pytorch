@@ -10,8 +10,8 @@ This code is based on the amazing work of [Stable Diffusion from scratch](https:
 Clone the repository and install with uv:
 
 ```bash
-git clone https://github.com/grupo-avispa/wildlife_pond_detector.git
-cd wildlife_pond_detector
+git clone https://github.com/ajtudela/stable_diffusion_pytorch.git
+cd stable_diffusion_pytorch
 uv venv --system-site-packages
 uv sync
 ```
